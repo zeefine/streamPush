@@ -176,6 +176,30 @@ def _build_batch_filter_prompt(items: list[NewsItem]) -> str:
     return "\n\n".join(parts)
 
 
+def _build_fallback_digest(items: list[ClassifiedNews], target_keyword_text: str) -> str:
+    top_items = items[:8]
+    highlight_lines = [f"- {classified.item.title}" for classified in top_items[:5]]
+    news_lines = []
+    for classified in top_items:
+        item = classified.item
+        matched = "、".join(classified.matched_keywords) if classified.matched_keywords else "未标注"
+        news_lines.append(f"- {item.title}｜摘要生成超时，建议查看原文｜{matched}｜{item.link}")
+    suggestion_lines = [
+        "- 动作：优先阅读“今日要点”前3条原文；预期收益：快速掌握核心变化；优先级（高）",
+        "- 动作：按关键词筛选关注标的并更新观察清单；预期收益：降低信息遗漏；优先级（中）",
+    ]
+    if not highlight_lines:
+        highlight_lines = [f"- 今日未筛选到与“{target_keyword_text}”相关的新闻。"]
+    return (
+        "【今日要点】\n"
+        + "\n".join(highlight_lines)
+        + "\n【新闻速览】\n"
+        + ("\n".join(news_lines) if news_lines else f"- 暂无相关新闻｜-｜-｜-")
+        + "\n【团队建议】\n"
+        + "\n".join(suggestion_lines)
+    )
+
+
 def _retry_config() -> tuple[int, float, float]:
     cfg = load_file_settings()["llm"]
     attempts = int(cfg.get("retry_max_attempts", 4))
@@ -237,13 +261,36 @@ def _is_retriable_llm_error(exc: Exception) -> bool:
     return isinstance(exc, ValueError) and "provider returned error" in str(exc).lower()
 
 
-async def _ainvoke_with_retry(llm, messages):
+def _extract_token_usage(resp) -> tuple[int, int, int]:
+    usage = getattr(resp, "usage_metadata", None) or {}
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    total_tokens = int(usage.get("total_tokens", 0) or 0)
+    if total_tokens == 0:
+        response_metadata = getattr(resp, "response_metadata", None) or {}
+        token_usage = response_metadata.get("token_usage", {}) if isinstance(response_metadata, dict) else {}
+        input_tokens = int(token_usage.get("prompt_tokens", input_tokens) or input_tokens)
+        output_tokens = int(token_usage.get("completion_tokens", output_tokens) or output_tokens)
+        total_tokens = int(token_usage.get("total_tokens", input_tokens + output_tokens) or input_tokens + output_tokens)
+    return input_tokens, output_tokens, total_tokens
+
+
+async def _ainvoke_with_retry(llm, messages, call_name: str = "unknown"):
     attempts, base_delay, max_delay = _retry_config()
     for i in range(attempts):
         try:
             if i > 0:
                 logger.info("llm_retry_attempt attempt=%s/%s", i + 1, attempts)
-            return await llm.ainvoke(messages)
+            resp = await llm.ainvoke(messages)
+            input_tokens, output_tokens, total_tokens = _extract_token_usage(resp)
+            logger.info(
+                "llm_token_usage call=%s input_tokens=%s output_tokens=%s total_tokens=%s",
+                call_name,
+                input_tokens,
+                output_tokens,
+                total_tokens,
+            )
+            return resp
         except Exception as exc:
             status_code = _extract_provider_error_code(exc)
             retriable = _is_retriable_llm_error(exc)
@@ -305,6 +352,7 @@ async def filter_news_by_llm(items: list[NewsItem]) -> list[ClassifiedNews]:
         resp = await _ainvoke_with_retry(
             llm,
             [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+            call_name="filter",
         )
 
         text = (resp.content or "").strip()
@@ -364,9 +412,21 @@ async def summarize_news(items: list[ClassifiedNews]) -> str:
         "以下是新闻输入：\n"
         f"{build_news_prompt(items)}"
     )
-    response = await _ainvoke_with_retry(
-        llm,
-        [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
-    )
+    try:
+        response = await _ainvoke_with_retry(
+            llm,
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)],
+            call_name="summary",
+        )
+    except Exception as exc:
+        status_code = _extract_provider_error_code(exc)
+        if status_code == 524:
+            logger.error(
+                "llm_summary_timeout_fallback status_code=%s input_items=%s",
+                status_code,
+                len(items),
+            )
+            return _build_fallback_digest(items, target_keyword_text)
+        raise
     logger.info("llm_summary_done input_items=%s output_chars=%s", len(items), len(response.content or ""))
     return response.content
