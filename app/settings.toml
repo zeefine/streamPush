@@ -1,0 +1,48 @@
+[llm]
+model_name = "gpt-4o-mini"
+base_url = "https://api.openai.com/v1"
+temperature = 0.2
+timeout_seconds = 30
+retry_max_attempts = 4
+retry_base_delay_seconds = 1.0
+retry_max_delay_seconds = 10.0
+
+[feishu]
+base_url = "https://open.feishu.cn"
+recipient_id_type = "open_id"
+
+[logging]
+level = "INFO"
+format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+[news]
+max_items = 8
+lookback_hours = 24
+rss_urls = [
+  "https://openai.com/blog/rss.xml",
+  "https://deepmind.google/blog/rss.xml",
+  "https://rss.arxiv.org/rss/cs.AI",
+  "https://rss.arxiv.org/rss/cs.LG",
+  "https://www.v2ex.com/feed/tab/hot.xml",
+  "https://hnrss.org/frontpage",
+  "https://sspai.com/feed",
+  "https://rsshub.app/github/trending/daily",
+  "https://rsshub.app/zhihu/hot",
+  "https://rsshub.app/weibo/search/hot",
+  "https://rsshub.app/juejin/trending/all/weekly",
+  "https://feedx.net/rss/nytimesdual.xml",
+  "https://36kr.com/feed",
+  "http://blog.caixin.com/feed",
+  "https://xueqiu.com/hots/topic/rss",
+]
+
+[prompt]
+system_role = "你是一位资深的新闻内容编辑者，工作内容是选取高质量的新闻并进行推送。你的目标是：高信噪比、可执行、避免夸张。"
+target_keywords = ["人工智能", "AI", "金融", "政治", "科技", "互联网", "大宗商品", "石油", "黄金", "能源"]
+filter_instruction = "请基于标题与摘要判断“是否与目标关键词列表中的任一关键词直接相关”。判定为相关必须满足至少一条：1) 新闻核心主题属于某个关键词；2) 新闻发布了与某关键词直接相关的新产品/新能力/新政策/新事件；3) 新闻会直接影响某关键词在业务、投资、监管或产业链中的预期。以下情况判定为不相关：A) 仅在背景中顺带提到关键词；B) 泛资讯但与关键词无直接联系；C) 与关键词无明确实质影响。"
+filter_system_prompt = "你是新闻分类助手。你需要根据标题和摘要判断新闻是否与目标关键词相关。请只返回 JSON，不要输出额外文本。"
+filter_output_schema = "{\"results\":[{\"index\":0,\"is_related\":true/false,\"matched_keywords\":[\"命中关键词\"],\"reason\":\"简短原因\"}]}"
+filter_batch_size = 20
+summary_grouping_rules = "分组规则：\\n1) 每条新闻只能放入一个最相关关键词分组。\\n2) 如果同一条命中多个关键词，优先选择更具体的关键词（例如“石油”优先于“大宗商品”）。\\n3) 若无合适分组，放入“其他相关”。"
+summary_output_template = "输出结构（严格遵守）：\\n【今日要点】\\n- 3到5条\\n【按关键词分组】\\n### 关键词A\\n- 标题｜一句话总结｜链接\\n### 关键词B\\n- 标题｜一句话总结｜链接\\n【团队建议】\\n- 2到4条"
+instruction = "请输出中文简报，严格使用以下结构：\n【今日要点】\n- 3到5条，每条不超过40字，强调事实变化。\n【新闻速览】\n- 对每条新闻输出：标题（可简写）｜一句话总结｜命中关键词｜原文链接。\n【团队建议】\n- 给出2到4条可执行建议，使用“动作 + 预期收益 + 优先级（高/中/低）”格式。\n要求：1) 仅基于输入新闻，不编造；2) 避免空话；3) 术语准确；4) 总字数控制在900字以内。"
